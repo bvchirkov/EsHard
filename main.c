@@ -145,7 +145,7 @@ static Reg reg_ss;
 typedef struct Pkg_t
 {
     uint8_t addr;	// Адрес устройства
-    uint8_t cmd;	// Команда
+    uint8_t mode;	// Команда
     Reg	    data;	// Данные
 } PKG;
 
@@ -155,60 +155,46 @@ typedef struct Pkg_t
 static volatile PKG pkg_in;
 
 /*----------------------------------------------------------------------
- Обработка пришедшей команды
- Команда выполняется в другом месте. В этой функции лишь заполняется
- регистр
- 
- aPkg_in  - входящий пакет
- aPkg_out - исходящий пакет
-----------------------------------------------------------------------*/
-void cmd_handler(const PKG aPkg_in, PKG * aPkg_out)
-{
-    uint8_t cmd = aPkg_in.cmd;
-    if (cmd == STATUS)
-    { //Send state device
-	aPkg_out->data.rdata = reg_ss.rdata;
-    } else if (cmd == SET)
-    { //Set
-	reg_ss.rdata = aPkg_in.data.rdata;
-	aPkg_out->data.rdata = aPkg_in.data.rdata | (1 << 7);
-    }
-}
-
-/*----------------------------------------------------------------------
  Отправка пакета
  Паузы нужны, чтобы не байты успевали отправляться
  
  TODO: Отправлять с помощью прерываний UART
 ----------------------------------------------------------------------*/
-void send_pkg(PKG * aPkg_out)
+void send_pkg(volatile PKG * aPkg)
 {
     _delay_ms(2);
-    USART0_TX(aPkg_out->addr);
+    USART0_TX(aPkg->addr);
     _delay_ms(2);
-    USART0_TX(aPkg_out->cmd);
+    USART0_TX(aPkg->mode);
     _delay_ms(2);
-    USART0_TX(aPkg_out->data.rdata);
+    USART0_TX(aPkg->data.rdata);
 }
 
 /*----------------------------------------------------------------------
  Обработка входящего пакета, как индивидуального, так и 
- широковещательного
+ широковещательного.
+ В случае широковещательного пакета, принимаем только команду CMD_OFF.
 ----------------------------------------------------------------------*/
-void pkg_handler(PKG * aPkg_out)
+void pkg_handler(volatile PKG * aPkg, Reg * aRegSS)
 {
-    if (pkg_in.addr == SLAVE_ADDR)
+    if (aPkg->addr == SLAVE_ADDR)
     {
-	aPkg_out->addr = SLAVE_ADDR;
-	aPkg_out->cmd  = pkg_in.cmd;
-	cmd_handler(pkg_in, aPkg_out);
-	send_pkg(aPkg_out);
-    } else if (pkg_in.addr == BROADCAST_ADDR)
+	if (aPkg->mode == STATUS)
+	{ 
+	    aPkg->data.rdata = aRegSS->rdata;
+	}
+	aPkg->data.bits.b7 = 1;
+	send_pkg(aPkg);
+    } else if (aPkg->addr == BROADCAST_ADDR)
     {
-	if (pkg_in.cmd != SET) return;
-	if (pkg_in.data.bits.cmd != CMD_OFF) return;
-	cmd_handler(pkg_in, aPkg_out);
-    }
+	if (aPkg->mode != SET && 
+	    aPkg->data.bits.cmd != CMD_OFF)
+	{
+	    return;
+	}
+    } else return;
+    
+    aRegSS->rdata = aPkg->data.rdata;
 }
 
 /*----------------------------------------------------------------------
@@ -393,7 +379,6 @@ int main ()
     lht_init();
 #endif
     
-    PKG pkg_out;
     uint32_t counter_ticks = 0; // max 65530
     SREG |=  (1 << 7);    //The global interrupt enable
 
@@ -401,7 +386,7 @@ int main ()
     {
 	if (index == 3)
 	{
-	    pkg_handler(&pkg_out);
+	    pkg_handler(&pkg_in, &reg_ss);
 	    index = 0;
 	}
 	reg_ss_handler(&reg_ss);
@@ -427,7 +412,7 @@ ISR(USART0_RX_vect)
 	pkg_in.addr = UDR0;
     } else if (index == 1)
     {
-	pkg_in.cmd = UDR0;
+	pkg_in.mode = UDR0;
     } else if (index == 2)
     {
 	pkg_in.data.rdata = UDR0;
