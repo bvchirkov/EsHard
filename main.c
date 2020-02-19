@@ -135,11 +135,6 @@ typedef union
 } Reg;
 
 /*----------------------------------------------------------------------
- Регистр состояний устройства
-----------------------------------------------------------------------*/
-static Reg reg_ss;
-
-/*----------------------------------------------------------------------
  Структура приходящего пакета
 ----------------------------------------------------------------------*/
 typedef struct Pkg_t
@@ -152,7 +147,7 @@ typedef struct Pkg_t
 /*----------------------------------------------------------------------
  Входящий пакет
 ----------------------------------------------------------------------*/
-static volatile PKG pkg_in;
+static volatile PKG pkg;
 
 /*----------------------------------------------------------------------
  Отправка пакета
@@ -175,13 +170,13 @@ void send_pkg(volatile PKG * aPkg)
  широковещательного.
  В случае широковещательного пакета, принимаем только команду CMD_OFF.
 ----------------------------------------------------------------------*/
-void pkg_handler(volatile PKG * aPkg, Reg * aRegSS)
+void pkg_handler(volatile PKG * aPkg, Reg * aBus)
 {
     if (aPkg->addr == SLAVE_ADDR)
     {
 	if (aPkg->mode == STATUS)
 	{ 
-	    aPkg->data.rdata = aRegSS->rdata;
+	    aPkg->data.rdata = aBus->rdata;
 	}
 	aPkg->data.bits.b7 = 1;
 	send_pkg(aPkg);
@@ -194,19 +189,20 @@ void pkg_handler(volatile PKG * aPkg, Reg * aRegSS)
 	}
     } else return;
     
-    aRegSS->rdata = aPkg->data.rdata;
+    aBus->rdata = aPkg->data.rdata;
 }
 
 /*----------------------------------------------------------------------
  Настройки стрелки
 ----------------------------------------------------------------------*/
+#if (SLAVE_TYPE == ARW)
+
 #define ARW_DDR			DDRE
 #define ARW_PORT		PORTE
 #define ARW_SIDE_LEFT		PE6
 #define ARW_CENTER		PE5
 #define ARW_SIDE_RIGHT		PE4
 
-#if (SLAVE_TYPE == ARW)
 void arw_init()
 {
     ARW_DDR  |= (1 << ARW_SIDE_LEFT)|(1 << ARW_CENTER)|(1 << ARW_SIDE_RIGHT);
@@ -218,16 +214,16 @@ void arw_init()
 /*----------------------------------------------------------------------
  Выбор стороны, которая должна мигать
 ----------------------------------------------------------------------*/
-void arw_choose_side(Reg * aRegSS, uint8_t * aArwSide)
+void arw_choose_side(Reg * aBus, uint8_t * aArwSide)
 {
-    if (aRegSS->bits.lock == 0)
+    if (aBus->bits.lock == 0)
     {
-	aRegSS->bits.lock = 1;
+	aBus->bits.lock = 1;
 	if (*aArwSide != 0) ARW_PORT &= ~(1 << *aArwSide);
-	if (aRegSS->bits.cmd == CMD_LEFT)
+	if (aBus->bits.cmd == CMD_LEFT)
 	{
 	    *aArwSide = ARW_SIDE_LEFT;
-	} else if (aRegSS->bits.cmd == CMD_RIGHT)
+	} else if (aBus->bits.cmd == CMD_RIGHT)
 	{
 	    *aArwSide = ARW_SIDE_RIGHT;
 	}
@@ -237,17 +233,17 @@ void arw_choose_side(Reg * aRegSS, uint8_t * aArwSide)
 /*----------------------------------------------------------------------
  Мигание и отключение стрелки
 ----------------------------------------------------------------------*/
-void arw_handler(Reg * aRegSS)
+void arw_handler(Reg * aBus)
 {
     static uint8_t arw_side = 0;
-    if (aRegSS->bits.cmd == CMD_OFF)
+    if (aBus->bits.cmd == CMD_OFF)
     {
 	ARW_PORT &= ~((1 << ARW_SIDE_LEFT)|(1 << ARW_SIDE_RIGHT)|(1 << ARW_CENTER));
     } else
     {
-	arw_choose_side(aRegSS, &arw_side);
+	arw_choose_side(aBus, &arw_side);
 	
-	if (aRegSS->bits.state == 0)
+	if (aBus->bits.state == 0)
 	{ // OFF
 	    ARW_PORT &= ~((1 << arw_side)|(1 << ARW_CENTER));
 	} else
@@ -261,20 +257,40 @@ void arw_handler(Reg * aRegSS)
 /*----------------------------------------------------------------------
  Настройки кнопки
 ----------------------------------------------------------------------*/
+#if (SLAVE_TYPE == BTN)
+
 #define BTN_DDR		DDRE
 #define BTN_PORT	PORTE
 #define BTN_PIN		PINE
 #define BTN_CHANEL_0	PE2   // Порт
 #define BTN_EXPECT	65000 // Количество тиков ожидания подтверждения
 
-#if (SLAVE_TYPE == BTN)
+#define BTN_LED_DDR	DDRE
+#define BTN_LED_PORT	PORTE
+#define BTN_LED_BIT	PE7
+
+void btn_led_init()
+{
+    BTN_LED_DDR  |= (1 << BTN_LED_BIT);
+    BTN_LED_PORT |= (1 << BTN_LED_BIT);
+    _delay_ms(1000);
+    BTN_LED_PORT &= ~(1 << BTN_LED_BIT);
+}
+
+void btn_led_change_state(uint8_t aBtnState)
+{
+    if (aBtnState == 0) BTN_LED_PORT &= ~(1 << BTN_LED_BIT);
+    else BTN_LED_PORT |= (1 << BTN_LED_BIT);
+}
+
 void btn_init()
 {
     BTN_DDR  &= ~(1 << BTN_CHANEL_0);
     BTN_PORT |=  (1 << BTN_CHANEL_0);
+    btn_led_init();
 }
 
-void btn_handler(Reg * aRegSS)
+void btn_handler(Reg * aBus)
 {
     static uint16_t btn_ticks_counter = 0;
     if ((BTN_PIN & (1 << BTN_CHANEL_0)) == 0)
@@ -287,20 +303,23 @@ void btn_handler(Reg * aRegSS)
     
     if (btn_ticks_counter == BTN_EXPECT)
     {
-	aRegSS->bits.btn0 = 1;
+	aBus->bits.btn0 = 1;
     }
+    
+    btn_led_change_state(aBus->bits.btn0)
 }
 #endif
 
 /*----------------------------------------------------------------------
  Настройки светофора
 ----------------------------------------------------------------------*/
+#if (SLAVE_TYPE == LHT)
+
 #define LHT_PORT	PORTE
 #define LHT_DDR		DDRE
 #define LHT_MODE_GO	PE5
 #define LHT_MODE_STOP	PE6
 
-#if (SLAVE_TYPE == LHT)
 void lht_init()
 {
     LHT_DDR  |= (1 << LHT_MODE_GO) | (1 << LHT_MODE_STOP);
@@ -312,16 +331,16 @@ void lht_init()
 /*----------------------------------------------------------------------
  Выбор режима работы светофора
 ----------------------------------------------------------------------*/
-void lht_choose_mode(Reg * aRegSS, uint8_t * aLhtMode)
+void lht_choose_mode(Reg * aBus, uint8_t * aLhtMode)
 {
-    if (aRegSS->bits.lock == 0)
+    if (aBus->bits.lock == 0)
     {
-	aRegSS->bits.lock = 1;
+	aBus->bits.lock = 1;
 	if (*aLhtMode != 0) LHT_PORT &= ~(1 << *aLhtMode);
-	if (aRegSS->bits.cmd == CMD_GO)
+	if (aBus->bits.cmd == CMD_GO)
 	{
 	    *aLhtMode = LHT_MODE_GO;
-	} else if (aRegSS->bits.cmd == CMD_STOP)
+	} else if (aBus->bits.cmd == CMD_STOP)
 	{
 	    *aLhtMode = LHT_MODE_STOP;
 	}
@@ -331,17 +350,17 @@ void lht_choose_mode(Reg * aRegSS, uint8_t * aLhtMode)
 /*----------------------------------------------------------------------
  Мигание и отключение светофора
 ----------------------------------------------------------------------*/
-void lht_handler(Reg * aRegSS)
+void lht_handler(Reg * aBus)
 {
     static uint8_t lht_mode = 0;
-    if (aRegSS->bits.cmd == CMD_OFF)
+    if (aBus->bits.cmd == CMD_OFF)
     {
 	LHT_PORT &= ~((1 << LHT_MODE_GO)|(1 << LHT_MODE_STOP));
     } else
     {
 	lht_choose_mode(aRegSS, &lht_mode);
 	
-	if (aRegSS->bits.state == 0)
+	if (aBus->bits.state == 0)
 	{ // OFF
 	    LHT_PORT &= ~(1 << lht_mode);
 	} else
@@ -355,21 +374,22 @@ void lht_handler(Reg * aRegSS)
 /*----------------------------------------------------------------------
  Обертка для используемой в текущий момент конфигурации устройства
 ----------------------------------------------------------------------*/
-void reg_ss_handler(Reg * aRegSS)
+void reg_ss_handler(Reg * aBus)
 {
 #if (SLAVE_TYPE == ARW)
-    arw_handler(aRegSS);
+    arw_handler(aBus);
 #elif (SLAVE_TYPE == BTN)
-    btn_handler(aRegSS);
+    btn_handler(aBus);
 #elif (SLAVE_TYPE == LHT)
-    lht_handler(aRegSS);
+    lht_handler(aBus);
 #endif
 }
 
 int main ()
 {
-    SREG &= ~(1 << 7);    //The global interrupt disable
+    SREG &= ~(1 << 7);    // The global interrupt disable
     init_usart();
+    Reg bus; 	  	  // Регистр состояний устройства
     
 #if (SLAVE_TYPE == ARW)
     arw_init();
@@ -378,27 +398,27 @@ int main ()
 #elif (SLAVE_TYPE == LHT)
     lht_init();
 #endif
-    
+
+#if (SLAVE_TYPE != BTN)    
     uint32_t counter_ticks = 0; // max 65530
-    SREG |=  (1 << 7);    //The global interrupt enable
+#endif
+    SREG |=  (1 << 7);    // The global interrupt enable
 
     while (1)
     {
 	if (index == 3)
 	{
-	    pkg_handler(&pkg_in, &reg_ss);
+	    pkg_handler(&pkg, &bus);
 	    index = 0;
 	}
-	reg_ss_handler(&reg_ss);
-	
+	reg_ss_handler(&bus);
+
+#if (SLAVE_TYPE != BTN)	
 	if (counter_ticks == BLINK_INTERVAL)
 	{
-	    reg_ss.bits.state = reg_ss.bits.state == 0 ? 1 : 0;
+	    bus.bits.state = bus.bits.state == 0 ? 1 : 0;
 	    counter_ticks = 0;
 	}
-// Для кнопки отключил, чтоб не засорял регистр
-// Можно красивее, но пока видимо так =)	
-#if (SLAVE_TYPE != BTN)
 	counter_ticks++;
 #endif
     }
@@ -409,13 +429,13 @@ ISR(USART0_RX_vect)
 {
     if (index == 0)
     {
-	pkg_in.addr = UDR0;
+	pkg.addr = UDR0;
     } else if (index == 1)
     {
-	pkg_in.mode = UDR0;
+	pkg.mode = UDR0;
     } else if (index == 2)
     {
-	pkg_in.data.rdata = UDR0;
+	pkg.data.rdata = UDR0;
     }
     
     index++;
