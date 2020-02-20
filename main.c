@@ -197,11 +197,11 @@ void pkg_handler(volatile PKG * aPkg, Reg * aBus)
 ----------------------------------------------------------------------*/
 #if (SLAVE_TYPE == ARW)
 
-#define ARW_DDR			DDRE
-#define ARW_PORT		PORTE
-#define ARW_SIDE_LEFT		PE6
-#define ARW_CENTER		PE5
-#define ARW_SIDE_RIGHT		PE4
+#define ARW_DDR			DDRD
+#define ARW_PORT		PORTD
+#define ARW_SIDE_LEFT		PD4
+#define ARW_CENTER		PD3
+#define ARW_SIDE_RIGHT		PD2
 
 void arw_init()
 {
@@ -315,10 +315,10 @@ void btn_handler(Reg * aBus)
 ----------------------------------------------------------------------*/
 #if (SLAVE_TYPE == LHT)
 
-#define LHT_PORT	PORTE
-#define LHT_DDR		DDRE
-#define LHT_MODE_GO	PE5
-#define LHT_MODE_STOP	PE6
+#define LHT_PORT	PORTD
+#define LHT_DDR		DDRD
+#define LHT_MODE_GO	PD2
+#define LHT_MODE_STOP	PD3
 
 void lht_init()
 {
@@ -358,7 +358,7 @@ void lht_handler(Reg * aBus)
 	LHT_PORT &= ~((1 << LHT_MODE_GO)|(1 << LHT_MODE_STOP));
     } else
     {
-	lht_choose_mode(aRegSS, &lht_mode);
+	lht_choose_mode(aBus, &lht_mode);
 	
 	if (aBus->bits.state == 0)
 	{ // OFF
