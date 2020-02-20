@@ -1,7 +1,7 @@
 APP_NAME	:= rfa
 
 #Device type
-ST	:= ARW
+ST	:= LHT
 #Slave address
 SA	:= 0x01
 
