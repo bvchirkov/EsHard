@@ -1,4 +1,26 @@
-//SLAVE
+/*Copyright © 2020 Chirkov Boris <b.v.chirkov@gmail.com>
+
+  Permission is hereby granted, free of charge, to any person obtaining 
+  a copy of this software and associated documentation files (the 
+  “Software”), to deal in the Software without restriction, including 
+  without limitation the rights to use, copy, modify, merge, publish, 
+  distribute, sublicense, and/or sell copies of the Software, and to 
+  permit persons to whom the Software is furnished to do so, subject to 
+  the following conditions:
+
+  The above copyright notice and this permission notice shall be 
+  included in all copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, 
+  EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF 
+  MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND 
+  NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS 
+  BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN 
+  ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN 
+  CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE 
+  SOFTWARE.
+*/
+
 #define F_CPU 16000000UL //частота процессора
 
 #include <avr/interrupt.h>
@@ -6,12 +28,19 @@
 #include <stdint.h>
 #include <util/delay.h>
 
+/*----------------------------------------------------------------------
+ Типы девайсов
+----------------------------------------------------------------------*/
 #define ARW		( 0x01 ) // Стрелка
 #define BTN		( 0x02 ) // Кнопка
 #define LHT		( 0x03 ) // Светофор
 
+/*----------------------------------------------------------------------
+ Адреса девайсов
+----------------------------------------------------------------------*/
 #define BROADCAST_ADDR	( 0x80 ) // Общий для всех адрес
 //#define SLAVE_ADDR	( 0x01 ) // Индивидуальный адрес (Max 0x7F-127)
+
 /*----------------------------------------------------------------------
  Активный тип устройства
 ----------------------------------------------------------------------*/
@@ -25,7 +54,7 @@
 /*----------------------------------------------------------------------
  Настройки скорости передачи данных по UART
 ----------------------------------------------------------------------*/
-#define USART_BAUDRATE 9600
+#define USART_BAUDRATE 	( 9600 )
 #define BAUD_PRESCALE (((F_CPU / (USART_BAUDRATE * 16UL))) - 1)
 
 /*----------------------------------------------------------------------
@@ -84,6 +113,41 @@ int USART0_RX (void)
 }
 
 /*----------------------------------------------------------------------
+ Запись данных в EEPROM
+ uiAddress - адрес записи данных
+ ucData	   - байт данных	
+----------------------------------------------------------------------*/
+void EEPROM_atomic_write(uint32_t uiAddress, uint8_t ucData)
+{
+    /* Wait for completion of previous write */
+    while(EECR & (1<<EEPE));
+    /* Set up address and Data Registers */
+    EEAR = uiAddress;
+    EEDR = ucData;
+    /* Write logical one to EEMPE */
+    EECR |= (1<<EEMPE);
+    /* Start eeprom write by setting EEPE */
+    EECR |= (1<<EEPE);
+}
+
+/*----------------------------------------------------------------------
+ Чтение данных из EEPROM
+ uiAddress - считываемый адрес
+ Возращается байт данных, который записан по указанному адресу
+----------------------------------------------------------------------*/
+uint8_t EEPROM_read(uint32_t uiAddress)
+{
+    /* Wait for completion of previous write */
+    while(EECR & (1<<EEPE));
+    /* Set up address register */
+    EEAR = uiAddress;
+    /* Start eeprom read by writing EERE */
+    EECR |= (1<<EERE);
+    /* Return data from Data Register */
+    return EEDR;
+}
+
+/*----------------------------------------------------------------------
  Счетчик байтов пакета
  Максимальное количество байтов - 3
 ----------------------------------------------------------------------*/
@@ -125,11 +189,11 @@ typedef union
     {
 	uint8_t cmd   : 2;
 	uint8_t b2    : 1;
-	uint8_t b3    : 1;
+	uint8_t elock : 1;
 	uint8_t btn0  : 1;
 	uint8_t state : 1;
 	uint8_t lock  : 1;
-	uint8_t b7    : 1;
+	uint8_t resp  : 1;
     } bits;
     uint8_t rdata;
 } Reg;
@@ -152,8 +216,6 @@ static volatile PKG pkg;
 /*----------------------------------------------------------------------
  Отправка пакета
  Паузы нужны, чтобы не байты успевали отправляться
- 
- TODO: Отправлять с помощью прерываний UART
 ----------------------------------------------------------------------*/
 void send_pkg(volatile PKG * aPkg)
 {
@@ -178,8 +240,9 @@ void pkg_handler(volatile PKG * aPkg, Reg * aBus)
 	{ 
 	    aPkg->data.rdata = aBus->rdata;
 	}
-	aPkg->data.bits.b7 = 1;
+	aPkg->data.bits.resp = 1;
 	send_pkg(aPkg);
+	aPkg->data.bits.resp = 0;
     } else if (aPkg->addr == BROADCAST_ADDR)
     {
 	if (aPkg->mode != SET && 
@@ -205,10 +268,16 @@ void pkg_handler(volatile PKG * aPkg, Reg * aBus)
 
 void arw_init()
 {
-    ARW_DDR  |= (1 << ARW_SIDE_LEFT)|(1 << ARW_CENTER)|(1 << ARW_SIDE_RIGHT);
-    ARW_PORT |= (1 << ARW_SIDE_LEFT)|(1 << ARW_CENTER)|(1 << ARW_SIDE_RIGHT);
+    ARW_DDR  |= (1 << ARW_SIDE_LEFT)
+	     |  (1 << ARW_CENTER)
+	     |	(1 << ARW_SIDE_RIGHT);
+    ARW_PORT |= (1 << ARW_SIDE_LEFT)
+	     |	(1 << ARW_CENTER)
+	     |	(1 << ARW_SIDE_RIGHT);
     _delay_ms(1000);
-    ARW_PORT &= ~((1 << ARW_SIDE_LEFT)|(1 << ARW_CENTER)|(1 << ARW_SIDE_RIGHT));
+    ARW_PORT &= ~((1 << ARW_SIDE_LEFT)
+		 |(1 << ARW_CENTER)
+		 |(1 << ARW_SIDE_RIGHT));
 }
 
 /*----------------------------------------------------------------------
@@ -238,7 +307,9 @@ void arw_handler(Reg * aBus)
     static uint8_t arw_side = 0;
     if (aBus->bits.cmd == CMD_OFF)
     {
-	ARW_PORT &= ~((1 << ARW_SIDE_LEFT)|(1 << ARW_SIDE_RIGHT)|(1 << ARW_CENTER));
+	ARW_PORT &= ~((1 << ARW_SIDE_LEFT)
+		     |(1 << ARW_SIDE_RIGHT)
+		     |(1 << ARW_CENTER));
     } else
     {
 	arw_choose_side(aBus, &arw_side);
@@ -329,7 +400,7 @@ void lht_init()
 }
 
 /*----------------------------------------------------------------------
- Выбор режима работы светофора
+ Выбор режима работы светофора	
 ----------------------------------------------------------------------*/
 void lht_choose_mode(Reg * aBus, uint8_t * aLhtMode)
 {
@@ -374,7 +445,7 @@ void lht_handler(Reg * aBus)
 /*----------------------------------------------------------------------
  Обертка для используемой в текущий момент конфигурации устройства
 ----------------------------------------------------------------------*/
-void reg_ss_handler(Reg * aBus)
+void bus_handler(Reg * aBus)
 {
 #if (SLAVE_TYPE == ARW)
     arw_handler(aBus);
@@ -385,11 +456,31 @@ void reg_ss_handler(Reg * aBus)
 #endif
 }
 
+/*----------------------------------------------------------------------
+ 
+----------------------------------------------------------------------*/
+void eeprom_handler(uint32_t aBusAddr, Reg aBus)
+{
+    // Чтоб каждый раз не дергать eeprom выставляю бит на шине, который
+    // говорит о том, что запись уже была прозведена.
+    // Бит сбрасывается, когда приходит новый пакет, потому что там
+    // этот бит сброшен.
+    if (aBus.bits.elock == 0)
+    {
+	cli();
+	EEPROM_atomic_write(aBusAddr, aBus.rdata);
+	aBus.bits.elock = 1;
+	sei();
+    }
+}
+
 int main ()
 {
-    SREG &= ~(1 << 7);    // The global interrupt disable
+    cli(); // Запрет всех прерываний
     init_usart();
-    Reg bus; 	  	  // Регистр состояний устройства
+    Reg bus; // Регистр состояний устройства
+    uint32_t bus_eeprom = 0x00;
+    bus.rdata = EEPROM_read(bus_eeprom);
     
 #if (SLAVE_TYPE == ARW)
     arw_init();
@@ -402,7 +493,7 @@ int main ()
 #if (SLAVE_TYPE != BTN)    
     uint32_t counter_ticks = 0; // max 65530
 #endif
-    SREG |=  (1 << 7);    // The global interrupt enable
+    sei(); // Разрешение всех прерываний
 
     while (1)
     {
@@ -411,8 +502,9 @@ int main ()
 	    pkg_handler(&pkg, &bus);
 	    index = 0;
 	}
-	reg_ss_handler(&bus);
-
+	eeprom_handler(bus_eeprom, bus);
+	bus_handler(&bus);
+	
 #if (SLAVE_TYPE != BTN)	
 	if (counter_ticks == BLINK_INTERVAL)
 	{
