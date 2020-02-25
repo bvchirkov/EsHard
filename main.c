@@ -25,6 +25,7 @@
 
 #include <avr/interrupt.h>
 #include <avr/io.h>
+#include <avr/eeprom.h>
 #include <stdint.h>
 #include <util/delay.h>
 
@@ -110,41 +111,6 @@ int USART0_RX (void)
     }
 
     return UDR0;
-}
-
-/*----------------------------------------------------------------------
- Запись данных в EEPROM
- uiAddress - адрес записи данных
- ucData	   - байт данных	
-----------------------------------------------------------------------*/
-void EEPROM_atomic_write(uint32_t uiAddress, uint8_t ucData)
-{
-    /* Wait for completion of previous write */
-    while(EECR & (1<<EEPE));
-    /* Set up address and Data Registers */
-    EEAR = uiAddress;
-    EEDR = ucData;
-    /* Write logical one to EEMPE */
-    EECR |= (1<<EEMPE);
-    /* Start eeprom write by setting EEPE */
-    EECR |= (1<<EEPE);
-}
-
-/*----------------------------------------------------------------------
- Чтение данных из EEPROM
- uiAddress - считываемый адрес
- Возращается байт данных, который записан по указанному адресу
-----------------------------------------------------------------------*/
-uint8_t EEPROM_read(uint32_t uiAddress)
-{
-    /* Wait for completion of previous write */
-    while(EECR & (1<<EEPE));
-    /* Set up address register */
-    EEAR = uiAddress;
-    /* Start eeprom read by writing EERE */
-    EECR |= (1<<EERE);
-    /* Return data from Data Register */
-    return EEDR;
 }
 
 /*----------------------------------------------------------------------
@@ -459,17 +425,17 @@ void bus_handler(Reg * aBus)
 /*----------------------------------------------------------------------
  
 ----------------------------------------------------------------------*/
-void eeprom_handler(uint32_t aBusAddr, Reg aBus)
+void eeprom_handler(uint8_t * aBusAddr, Reg * aBus)
 {
     // Чтоб каждый раз не дергать eeprom выставляю бит на шине, который
     // говорит о том, что запись уже была прозведена.
     // Бит сбрасывается, когда приходит новый пакет, потому что там
     // этот бит сброшен.
-    if (aBus.bits.elock == 0)
+    if (aBus->bits.elock == 0)
     {
 	cli();
-	EEPROM_atomic_write(aBusAddr, aBus.rdata);
-	aBus.bits.elock = 1;
+	eeprom_write_byte(aBusAddr, aBus->rdata);
+	aBus->bits.elock = 1;
 	sei();
     }
 }
@@ -479,9 +445,10 @@ int main ()
     cli(); // Запрет всех прерываний
     init_usart();
     Reg bus; // Регистр состояний устройства
-    uint32_t bus_eeprom = 0x00;
-    bus.rdata = EEPROM_read(bus_eeprom);
-    
+    uint8_t bus_eeprom = 0x0B;
+    eeprom_busy_wait();
+    bus.rdata = eeprom_read_byte(&bus_eeprom);
+        
 #if (SLAVE_TYPE == ARW)
     arw_init();
 #elif (SLAVE_TYPE == BTN)
@@ -502,7 +469,8 @@ int main ()
 	    pkg_handler(&pkg, &bus);
 	    index = 0;
 	}
-	eeprom_handler(bus_eeprom, bus);
+	
+	eeprom_handler(&bus_eeprom, &bus);
 	bus_handler(&bus);
 	
 #if (SLAVE_TYPE != BTN)	
