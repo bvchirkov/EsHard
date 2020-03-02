@@ -299,12 +299,12 @@ void arw_handler(Reg * aBus)
 #define BTN_DDR		DDRE
 #define BTN_PORT	PORTE
 #define BTN_PIN		PINE
-#define BTN_CHANEL_0	PE2   // Порт
+#define BTN_CHANEL_0	PE4   // Порт
 #define BTN_EXPECT	65000 // Количество тиков ожидания подтверждения
 
 #define BTN_LED_DDR	DDRE
 #define BTN_LED_PORT	PORTE
-#define BTN_LED_BIT	PE7
+#define BTN_LED_BIT	PE6
 
 void btn_led_init()
 {
@@ -343,7 +343,7 @@ void btn_handler(Reg * aBus)
 	aBus->bits.btn0 = 1;
     }
     
-    btn_led_change_state(aBus->bits.btn0)
+    btn_led_change_state(aBus->bits.btn0);
 }
 #endif
 
