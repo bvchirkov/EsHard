@@ -240,6 +240,7 @@ void arw_init()
     ARW_PORT |= (1 << ARW_SIDE_LEFT)
 	     |	(1 << ARW_CENTER)
 	     |	(1 << ARW_SIDE_RIGHT);
+    // Тестовое включение всех секторов на секунду
     _delay_ms(1000);
     ARW_PORT &= ~((1 << ARW_SIDE_LEFT)
 		 |(1 << ARW_CENTER)
@@ -247,30 +248,46 @@ void arw_init()
 }
 
 /*----------------------------------------------------------------------
- Выбор стороны, которая должна мигать
+ Выбор стороны, которая должна мигать, по состоянию шины
+ aBus 	      - шина
+ aArwSidePort - порт стороны, которая должна мигать
+ 
+ Если бит шины lock не выставлен, то осущетсвляется выбор стороны. Это 
+ сделано, чтобы исключить переопределение стороны на каждом тике МК. 
+ Затем сбрасываем состояние aArwSidePort, если она не нулевая, т.е. 
+ включена.
+ После этого смотрим биты направления, которые установлены на шине и
+ присваиваем соответствующий порт aArwSidePort.
 ----------------------------------------------------------------------*/
-void arw_choose_side(Reg * aBus, uint8_t * aArwSide)
+void arw_choose_side(Reg * aBus, uint8_t * aArwSidePort)
 {
     if (aBus->bits.lock == 0)
     {
 	aBus->bits.lock = 1;
-	if (*aArwSide != 0) ARW_PORT &= ~(1 << *aArwSide);
+	if (*aArwSidePort != 0) ARW_PORT &= ~(1 << *aArwSidePort);
 	if (aBus->bits.cmd == CMD_LEFT)
 	{
-	    *aArwSide = ARW_SIDE_LEFT;
+	    *aArwSidePort = ARW_SIDE_LEFT;
 	} else if (aBus->bits.cmd == CMD_RIGHT)
 	{
-	    *aArwSide = ARW_SIDE_RIGHT;
+	    *aArwSidePort = ARW_SIDE_RIGHT;
 	}
     }
 }
 
 /*----------------------------------------------------------------------
  Мигание и отключение стрелки
+ aBus - шина
+ 
+ Если пришел сигнал CMD_OFF, то выключаются все секторы стрелки, иначе 
+ из шины берется направление и выбирается порт в arw_choose_side. 
+ Мигание реализовано с помощью бита состояния, который меняется в 
+ основном цикле (пока не выполняется условие увеличивается счетчик, в 
+ противном случае меняется состояние и сбрасывается счетчик.
 ----------------------------------------------------------------------*/
 void arw_handler(Reg * aBus)
 {
-    static uint8_t arw_side = 0;
+    static uint8_t arw_side_port = 0;
     if (aBus->bits.cmd == CMD_OFF)
     {
 	ARW_PORT &= ~((1 << ARW_SIDE_LEFT)
@@ -278,14 +295,14 @@ void arw_handler(Reg * aBus)
 		     |(1 << ARW_CENTER));
     } else
     {
-	arw_choose_side(aBus, &arw_side);
+	arw_choose_side(aBus, &arw_side_port);
 	
 	if (aBus->bits.state == 0)
 	{ // OFF
-	    ARW_PORT &= ~((1 << arw_side)|(1 << ARW_CENTER));
+	    ARW_PORT &= ~((1 << arw_side_port)|(1 << ARW_CENTER));
 	} else
 	{ // ON
-	    ARW_PORT |=  (1 << arw_side)|(1 << ARW_CENTER);
+	    ARW_PORT |=  (1 << arw_side_port)|(1 << ARW_CENTER);
 	}
     }
 }
@@ -327,6 +344,17 @@ void btn_init()
     btn_led_init();
 }
 
+/*----------------------------------------------------------------------
+ Обработчки нажатий на кнопку ИПР
+ 
+ Типовой обработчик: считаем количество тиков пока зажата кнопка, кнопка
+ отпущена - счетчик сбрасывается. Когда счетчик достик нужного числа,
+ выставляется бит на шине и включается светодиод (выключается, если 
+ бит сброшен).
+ 
+ TODO Вытащить включение светодиода, эта функция предназначена только
+      для кнопки
+----------------------------------------------------------------------*/
 void btn_handler(Reg * aBus)
 {
     static uint16_t btn_ticks_counter = 0;
@@ -359,50 +387,70 @@ void btn_handler(Reg * aBus)
 
 void lht_init()
 {
-    LHT_DDR  |= (1 << LHT_MODE_GO) | (1 << LHT_MODE_STOP);
-    LHT_PORT |= (1 << LHT_MODE_GO) | (1 << LHT_MODE_STOP);
+    LHT_DDR  |= (1 << LHT_MODE_GO)
+	     |  (1 << LHT_MODE_STOP);
+    LHT_PORT |= (1 << LHT_MODE_GO)
+	     |  (1 << LHT_MODE_STOP);
+    // Тестовое включение всех секторов на секунду
     _delay_ms(1000);
     LHT_PORT &= ~((1 << LHT_MODE_GO) | (1 << LHT_MODE_STOP));
 }
 
 /*----------------------------------------------------------------------
- Выбор режима работы светофора	
+ Выбор режима работы светофора
+ aBus 	      - шина
+ aLhtModePort - порт МК, который должен быть включен для того или иного 
+		режима работы светофора
+ 
+ Если бит шины lock не выставлен, то осущетсвляется выбор режима. Это 
+ сделано, чтобы исключить переопределение режима на каждом тике МК. 
+ Затем сбрасываем состояние aLhtModePort, если она не нулевая, т.е. 
+ включена.
+ После этого смотрим биты режима, которые установлены на шине и 
+ присваиваем соответствующий порт aLhtModePort.
 ----------------------------------------------------------------------*/
-void lht_choose_mode(Reg * aBus, uint8_t * aLhtMode)
+void lht_choose_mode(Reg * aBus, uint8_t * aLhtModePort)
 {
     if (aBus->bits.lock == 0)
     {
 	aBus->bits.lock = 1;
-	if (*aLhtMode != 0) LHT_PORT &= ~(1 << *aLhtMode);
+	if (*aLhtModePort != 0) LHT_PORT &= ~(1 << *aLhtModePort);
 	if (aBus->bits.cmd == CMD_GO)
 	{
-	    *aLhtMode = LHT_MODE_GO;
+	    *aLhtModePort = LHT_MODE_GO;
 	} else if (aBus->bits.cmd == CMD_STOP)
 	{
-	    *aLhtMode = LHT_MODE_STOP;
+	    *aLhtModePort = LHT_MODE_STOP;
 	}
     }
 }
 
 /*----------------------------------------------------------------------
  Мигание и отключение светофора
+ aBus - шина
+ 
+ Если пришел сигнал CMD_OFF, то выключаются все секторы светофрора, 
+ иначе из шины берется режим и выбирается порт в lht_choose_mode. 
+ Мигание реализовано с помощью бита состояния, который меняется в 
+ основном цикле (пока не выполняется условие увеличивается счетчик, в 
+ противном случае меняется состояние и сбрасывается счетчик.
 ----------------------------------------------------------------------*/
 void lht_handler(Reg * aBus)
 {
-    static uint8_t lht_mode = 0;
+    static uint8_t lht_mode_port = 0;
     if (aBus->bits.cmd == CMD_OFF)
     {
 	LHT_PORT &= ~((1 << LHT_MODE_GO)|(1 << LHT_MODE_STOP));
     } else
     {
-	lht_choose_mode(aBus, &lht_mode);
+	lht_choose_mode(aBus, &lht_mode_port);
 	
 	if (aBus->bits.state == 0)
 	{ // OFF
-	    LHT_PORT &= ~(1 << lht_mode);
+	    LHT_PORT &= ~(1 << lht_mode_port);
 	} else
 	{ // ON
-	    LHT_PORT |=  (1 << lht_mode);
+	    LHT_PORT |=  (1 << lht_mode_port);
 	}
     }
 }
@@ -423,14 +471,15 @@ void bus_handler(Reg * aBus)
 }
 
 /*----------------------------------------------------------------------
- 
+ Обработчик записи в энергонезависимую память
 ----------------------------------------------------------------------*/
 void eeprom_handler(uint8_t * aBusAddr, Reg * aBus)
 {
     // Чтоб каждый раз не дергать eeprom выставляю бит на шине, который
     // говорит о том, что запись уже была прозведена.
     // Бит сбрасывается, когда приходит новый пакет, потому что там
-    // этот бит сброшен.
+    // этот бит сброшен и новый пакет в большинстве случаев говорит о
+    // новом состоянии
     if (aBus->bits.elock == 0)
     {
 	cli();
@@ -445,7 +494,7 @@ int main ()
     cli(); // Запрет всех прерываний
     init_usart();
     Reg bus; // Регистр состояний устройства
-    uint8_t bus_eeprom = 0x0B;
+    uint8_t bus_eeprom = 0x0B; // Адрес ячейки энергонезависимой памяти
     eeprom_busy_wait();
     bus.rdata = eeprom_read_byte(&bus_eeprom);
         
