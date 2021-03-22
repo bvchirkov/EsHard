@@ -141,25 +141,15 @@ static volatile uint8_t index = 0;
 #define CMD_GO		( 0x02 )
 
 #pragma pack(push,1)
-/*----------------------------------------------------------------------
- 76543210
- 7 бит - выставляется как признак того, что команда получена верно
- 6 бит - для стрелки и светофора бит блокировки. Блокировка используется
-	 чтобы избавиться от выбора режима на каждом тике.
- 5 бит - для стрелки и светофора бит состояния - вкл/выкл.
- 4 бит - состояние кнопки (1 - была нажата, 0 - не нажата)
- 3 бит - 
- 2 бит - 
- 1 и 0 бит - команда для стрелки или светофора
-----------------------------------------------------------------------*/
 typedef union
 {
     struct
     {
-        uint8_t cmd   : 2;
-        uint8_t b2    : 1;
-        uint8_t elock : 1;
-        uint8_t btn0  : 1;
+        uint8_t cmd   : 2; // команда для стрелки или светофора
+        uint8_t b2    : 1; // для стрелки и светофора бит блокировки. Блокировка используется
+	                       // чтобы избавиться от выбора режима на каждом тике.
+        uint8_t elock : 1; // для стрелки и светофора бит состояния - вкл/выкл.
+        uint8_t btn0  : 1; // состояние кнопки (1 - была нажата, 0 - не нажата)
         uint8_t state : 1;
         uint8_t lock  : 1;
         uint8_t resp  : 1;
@@ -174,7 +164,7 @@ typedef struct
 {
     uint8_t addr;	// Адрес устройства
     uint8_t mode;	// Команда
-    uint8_t reg;	// Данные
+    uint8_t data;	// Данные
 } PKG;
 #pragma pack(pop)
 
@@ -194,7 +184,7 @@ void send_pkg(const volatile PKG * aPkg)
     _delay_ms(2);
     USART0_TX(aPkg->mode);
     _delay_ms(2);
-    USART0_TX(aPkg->reg);
+    USART0_TX(aPkg->data);
 }
 
 /*----------------------------------------------------------------------
@@ -208,21 +198,21 @@ void pkg_handler(volatile PKG * aPkg, Reg * aBus)
     {
         if (aPkg->mode == STATUS)
         { 
-            aPkg->reg = aBus->raw;
+            aPkg->data = aBus->raw;
         }
-        // aPkg->reg.bits.resp = 1;
+        // aPkg->data.bits.resp = 1;
         send_pkg(aPkg);
-        // aPkg->reg.bits.resp = 0;
+        // aPkg->data.bits.resp = 0;
     } else if (aPkg->addr == BROADCAST_ADDR)
     {
         if (aPkg->mode != SET && 
-            ((Reg)aPkg->reg).bits.cmd != CMD_OFF) // Похоже на костыль
+            ((Reg)aPkg->data).bits.cmd != CMD_OFF) // Похоже на костыль
         {
             return;
         }
     } else return;
     
-    aBus = (Reg*)&aPkg->reg;
+    aBus = (Reg*)&aPkg->data;
 }
 
 /*----------------------------------------------------------------------
@@ -563,7 +553,7 @@ ISR(USART0_RX_vect)
 	    pkg.mode = UDR0;
     } else if (index == 2)
     {
-	    pkg.reg = UDR0;
+	    pkg.data = UDR0;
     }
     
     index++;
