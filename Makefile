@@ -1,9 +1,9 @@
-APP_NAME	:= rfa
-
 #Device type
 ST	:= LHT
 #Slave address
 SA	:= 0x01
+
+APP_NAME	:= $(ST)_$(SA)
 
 AVRGCC		:= /usr/bin/avr-gcc
 AVROBJCOPY	:= /usr/bin/avr-objcopy
@@ -39,8 +39,8 @@ flush:
 
 #General fuses
 fuse:
-	$(AVRDUDE) -c $(PROGRAMMER) -P usb -p $(MMCU_PROG) -F -U lfuse:w:0xbf:m
-	$(AVRDUDE) -c $(PROGRAMMER) -P usb -p $(MMCU_PROG) -F -U hfuse:w:0x55:m
+	$(AVRDUDE) -c $(PROGRAMMER) -P usb -p $(MMCU_PROG) -F -U lfuse:w:0xff:m
+	$(AVRDUDE) -c $(PROGRAMMER) -P usb -p $(MMCU_PROG) -F -U hfuse:w:0xd5:m
 #	$(AVRDUDE) -c $(PROGRAMMER) -P usb -p $(MMCU_PROG) -U efuse:w:0xfe:m
 	
 #JTAG fuses

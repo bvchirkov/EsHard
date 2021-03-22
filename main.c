@@ -46,7 +46,9 @@
  Активный тип устройства
 ----------------------------------------------------------------------*/
 //#define SLAVE_TYPE	ARW
-
+#ifndef SLAVE_TYPE
+#  error "Don't set SLAVE_TYPE"
+#endif //SLAVE_TYPE
 /*----------------------------------------------------------------------
  Интервал в тиках МК между миганиями стрелки и светофора
 ----------------------------------------------------------------------*/
@@ -87,7 +89,7 @@ void init_usart()
 /*----------------------------------------------------------------------
  Запись в регистр UDR0 -> передача сообщения
 ----------------------------------------------------------------------*/
-uint8_t USART0_TX (uint8_t aByte)
+uint8_t USART0_TX (const uint8_t aByte)
 {
     //UART not ready to TX
     if (!(UCSR0A & (1 << UDRE0)))
@@ -107,7 +109,7 @@ int USART0_RX (void)
     //UART not ready to RX
     if (!(UCSR0A & (1 << RXC0)))
     {
-	return -1;
+	    return -1;
     }
 
     return UDR0;
@@ -123,7 +125,7 @@ static volatile uint8_t index = 0;
  Возможные значения второго байта данных 
 ----------------------------------------------------------------------*/
 #define STATUS		( 0x00 )
-#define SET		( 0x01 )
+#define SET		    ( 0x01 )
 
 /*----------------------------------------------------------------------
  Возможные значения третьего байта данных
@@ -138,6 +140,7 @@ static volatile uint8_t index = 0;
 #define CMD_STOP	( 0x01 )
 #define CMD_GO		( 0x02 )
 
+#pragma pack(push,1)
 /*----------------------------------------------------------------------
  76543210
  7 бит - выставляется как признак того, что команда получена верно
@@ -153,26 +156,27 @@ typedef union
 {
     struct
     {
-	uint8_t cmd   : 2;
-	uint8_t b2    : 1;
-	uint8_t elock : 1;
-	uint8_t btn0  : 1;
-	uint8_t state : 1;
-	uint8_t lock  : 1;
-	uint8_t resp  : 1;
+        uint8_t cmd   : 2;
+        uint8_t b2    : 1;
+        uint8_t elock : 1;
+        uint8_t btn0  : 1;
+        uint8_t state : 1;
+        uint8_t lock  : 1;
+        uint8_t resp  : 1;
     } bits;
-    uint8_t rdata;
+    uint8_t raw;
 } Reg;
 
 /*----------------------------------------------------------------------
  Структура приходящего пакета
 ----------------------------------------------------------------------*/
-typedef struct Pkg_t
+typedef struct
 {
     uint8_t addr;	// Адрес устройства
     uint8_t mode;	// Команда
-    Reg	    data;	// Данные
+    uint8_t reg;	// Данные
 } PKG;
+#pragma pack(pop)
 
 /*----------------------------------------------------------------------
  Входящий пакет
@@ -181,16 +185,16 @@ static volatile PKG pkg;
 
 /*----------------------------------------------------------------------
  Отправка пакета
- Паузы нужны, чтобы не байты успевали отправляться
+ Паузы нужны, чтобы байты успевали отправляться
 ----------------------------------------------------------------------*/
-void send_pkg(volatile PKG * aPkg)
+void send_pkg(const volatile PKG * aPkg)
 {
     _delay_ms(2);
     USART0_TX(aPkg->addr);
     _delay_ms(2);
     USART0_TX(aPkg->mode);
     _delay_ms(2);
-    USART0_TX(aPkg->data.rdata);
+    USART0_TX(aPkg->reg);
 }
 
 /*----------------------------------------------------------------------
@@ -202,23 +206,33 @@ void pkg_handler(volatile PKG * aPkg, Reg * aBus)
 {
     if (aPkg->addr == SLAVE_ADDR)
     {
-	if (aPkg->mode == STATUS)
-	{ 
-	    aPkg->data.rdata = aBus->rdata;
-	}
-	aPkg->data.bits.resp = 1;
-	send_pkg(aPkg);
-	aPkg->data.bits.resp = 0;
+        if (aPkg->mode == STATUS)
+        { 
+            aPkg->reg = aBus->raw;
+        }
+        // aPkg->reg.bits.resp = 1;
+        send_pkg(aPkg);
+        // aPkg->reg.bits.resp = 0;
     } else if (aPkg->addr == BROADCAST_ADDR)
     {
-	if (aPkg->mode != SET && 
-	    aPkg->data.bits.cmd != CMD_OFF)
-	{
-	    return;
-	}
+        if (aPkg->mode != SET && 
+            ((Reg)aPkg->reg).bits.cmd != CMD_OFF) // Похоже на костыль
+        {
+            return;
+        }
     } else return;
     
-    aBus->rdata = aPkg->data.rdata;
+    aBus = (Reg*)&aPkg->reg;
+}
+
+/*----------------------------------------------------------------------
+ 
+----------------------------------------------------------------------*/
+void check_locked_dev(Reg * aBus)
+{
+    if (aBus->bits.lock) return;
+    
+    aBus->bits.lock = 1;
 }
 
 /*----------------------------------------------------------------------
@@ -228,9 +242,9 @@ void pkg_handler(volatile PKG * aPkg, Reg * aBus)
 
 #define ARW_DDR			DDRD
 #define ARW_PORT		PORTD
-#define ARW_SIDE_LEFT		PD4
+#define ARW_SIDE_LEFT	PD4
 #define ARW_CENTER		PD3
-#define ARW_SIDE_RIGHT		PD2
+#define ARW_SIDE_RIGHT	PD2
 
 void arw_init()
 {
@@ -249,7 +263,7 @@ void arw_init()
 
 /*----------------------------------------------------------------------
  Выбор стороны, которая должна мигать, по состоянию шины
- aBus 	      - шина
+ aCmd 	      - управляющая команда
  aArwSidePort - порт стороны, которая должна мигать
  
  Если бит шины lock не выставлен, то осущетсвляется выбор стороны. Это 
@@ -259,19 +273,19 @@ void arw_init()
  После этого смотрим биты направления, которые установлены на шине и
  присваиваем соответствующий порт aArwSidePort.
 ----------------------------------------------------------------------*/
-void arw_choose_side(Reg * aBus, uint8_t * aArwSidePort)
+void arw_choose_side(const uint8_t aCmd, uint8_t * aArwSidePort)
 {
-    if (aBus->bits.lock == 0)
+    if (*aArwSidePort)
     {
-	aBus->bits.lock = 1;
-	if (*aArwSidePort != 0) ARW_PORT &= ~(1 << *aArwSidePort);
-	if (aBus->bits.cmd == CMD_LEFT)
-	{
-	    *aArwSidePort = ARW_SIDE_LEFT;
-	} else if (aBus->bits.cmd == CMD_RIGHT)
-	{
-	    *aArwSidePort = ARW_SIDE_RIGHT;
-	}
+        ARW_PORT &= ~(1 << *aArwSidePort);
+    }
+
+    if (aCmd == CMD_LEFT)
+    {
+        *aArwSidePort = ARW_SIDE_LEFT;
+    } else if (aCmd == CMD_RIGHT)
+    {
+        *aArwSidePort = ARW_SIDE_RIGHT;
     }
 }
 
@@ -290,20 +304,21 @@ void arw_handler(Reg * aBus)
     static uint8_t arw_side_port = 0;
     if (aBus->bits.cmd == CMD_OFF)
     {
-	ARW_PORT &= ~((1 << ARW_SIDE_LEFT)
-		     |(1 << ARW_SIDE_RIGHT)
-		     |(1 << ARW_CENTER));
+        ARW_PORT &= ~((1 << ARW_SIDE_LEFT)
+                |(1 << ARW_SIDE_RIGHT)
+                |(1 << ARW_CENTER));
     } else
     {
-	arw_choose_side(aBus, &arw_side_port);
-	
-	if (aBus->bits.state == 0)
-	{ // OFF
-	    ARW_PORT &= ~((1 << arw_side_port)|(1 << ARW_CENTER));
-	} else
-	{ // ON
-	    ARW_PORT |=  (1 << arw_side_port)|(1 << ARW_CENTER);
-	}
+        check_locked_dev(aBus);
+        arw_choose_side(aBus->bits.cmd, &arw_side_port);
+        
+        if (aBus->bits.state == 0)
+        { // OFF
+            ARW_PORT &= ~((1 << arw_side_port)|(1 << ARW_CENTER));
+        } else
+        { // ON
+            ARW_PORT |=  (1 << arw_side_port)|(1 << ARW_CENTER);
+        }
     }
 }
 #endif
@@ -313,20 +328,21 @@ void arw_handler(Reg * aBus)
 ----------------------------------------------------------------------*/
 #if (SLAVE_TYPE == BTN)
 
-#define BTN_DDR		DDRE
-#define BTN_PORT	PORTE
-#define BTN_PIN		PINE
+#define BTN_DDR		    DDRE
+#define BTN_PORT	    PORTE
+#define BTN_PIN		    PINE
 #define BTN_CHANEL_0	PE4   // Порт
-#define BTN_EXPECT	65000 // Количество тиков ожидания подтверждения
+#define BTN_EXPECT	    65000 // Количество тиков ожидания подтверждения
 
-#define BTN_LED_DDR	DDRE
+#define BTN_LED_DDR	    DDRE
 #define BTN_LED_PORT	PORTE
-#define BTN_LED_BIT	PE6
+#define BTN_LED_BIT	    PE6
 
 void btn_led_init()
 {
     BTN_LED_DDR  |= (1 << BTN_LED_BIT);
     BTN_LED_PORT |= (1 << BTN_LED_BIT);
+    // Тестовое включение светодиода на секунду
     _delay_ms(1000);
     BTN_LED_PORT &= ~(1 << BTN_LED_BIT);
 }
@@ -360,15 +376,15 @@ void btn_handler(Reg * aBus)
     static uint16_t btn_ticks_counter = 0;
     if ((BTN_PIN & (1 << BTN_CHANEL_0)) == 0)
     {
-	btn_ticks_counter++;
+	    btn_ticks_counter++;
     } else
     {
-	btn_ticks_counter = 0;
+	    btn_ticks_counter = 0;
     }
     
     if (btn_ticks_counter == BTN_EXPECT)
     {
-	aBus->bits.btn0 = 1;
+	    aBus->bits.btn0 = 1;
     }
     
     btn_led_change_state(aBus->bits.btn0);
@@ -380,9 +396,9 @@ void btn_handler(Reg * aBus)
 ----------------------------------------------------------------------*/
 #if (SLAVE_TYPE == LHT)
 
-#define LHT_PORT	PORTD
-#define LHT_DDR		DDRD
-#define LHT_MODE_GO	PD2
+#define LHT_PORT	    PORTD
+#define LHT_DDR		    DDRD
+#define LHT_MODE_GO	    PD2
 #define LHT_MODE_STOP	PD3
 
 void lht_init()
@@ -409,19 +425,21 @@ void lht_init()
  После этого смотрим биты режима, которые установлены на шине и 
  присваиваем соответствующий порт aLhtModePort.
 ----------------------------------------------------------------------*/
-void lht_choose_mode(Reg * aBus, uint8_t * aLhtModePort)
+void lht_choose_mode(const uint8_t aCmd, uint8_t * aLhtModePort)
 {
-    if (aBus->bits.lock == 0)
+	if (*aLhtModePort != 0) 
     {
-	aBus->bits.lock = 1;
-	if (*aLhtModePort != 0) LHT_PORT &= ~(1 << *aLhtModePort);
-	if (aBus->bits.cmd == CMD_GO)
-	{
-	    *aLhtModePort = LHT_MODE_GO;
-	} else if (aBus->bits.cmd == CMD_STOP)
-	{
-	    *aLhtModePort = LHT_MODE_STOP;
-	}
+        LHT_PORT &= ~(1 << *aLhtModePort);
+    }
+
+    switch (aCmd)
+    {
+    case CMD_GO:
+        *aLhtModePort = LHT_MODE_GO;
+        break;
+    case CMD_STOP:
+        *aLhtModePort = LHT_MODE_STOP;
+        break;
     }
 }
 
@@ -440,18 +458,19 @@ void lht_handler(Reg * aBus)
     static uint8_t lht_mode_port = 0;
     if (aBus->bits.cmd == CMD_OFF)
     {
-	LHT_PORT &= ~((1 << LHT_MODE_GO)|(1 << LHT_MODE_STOP));
+	    LHT_PORT &= ~((1 << LHT_MODE_GO)|(1 << LHT_MODE_STOP));
     } else
     {
-	lht_choose_mode(aBus, &lht_mode_port);
+        check_locked_dev(aBus);
+	    lht_choose_mode(aBus->bits.cmd, &lht_mode_port);
 	
-	if (aBus->bits.state == 0)
-	{ // OFF
-	    LHT_PORT &= ~(1 << lht_mode_port);
-	} else
-	{ // ON
-	    LHT_PORT |=  (1 << lht_mode_port);
-	}
+        if (aBus->bits.state == 0)
+        { // OFF
+            LHT_PORT &= ~(1 << lht_mode_port);
+        } else
+        { // ON
+            LHT_PORT |=  (1 << lht_mode_port);
+        }
     }
 }
 #endif
@@ -482,10 +501,10 @@ void eeprom_handler(uint8_t * aBusAddr, Reg * aBus)
     // новом состоянии
     if (aBus->bits.elock == 0)
     {
-	cli();
-	eeprom_write_byte(aBusAddr, aBus->rdata);
-	aBus->bits.elock = 1;
-	sei();
+        cli();
+        eeprom_write_byte(aBusAddr, aBus->raw);
+        aBus->bits.elock = 1;
+        sei();
     }
 }
 
@@ -496,7 +515,7 @@ int main ()
     Reg bus; // Регистр состояний устройства
     uint8_t bus_eeprom = 0x0B; // Адрес ячейки энергонезависимой памяти
     eeprom_busy_wait();
-    bus.rdata = eeprom_read_byte(&bus_eeprom);
+    bus.raw = eeprom_read_byte(&bus_eeprom);
         
 #if (SLAVE_TYPE == ARW)
     arw_init();
@@ -513,22 +532,22 @@ int main ()
 
     while (1)
     {
-	if (index == 3)
-	{
-	    pkg_handler(&pkg, &bus);
-	    index = 0;
-	}
-	
-	eeprom_handler(&bus_eeprom, &bus);
-	bus_handler(&bus);
+        if (index == 3)
+        {
+            pkg_handler(&pkg, &bus);
+            index = 0;
+        }
+        
+        eeprom_handler(&bus_eeprom, &bus);
+        bus_handler(&bus);
 	
 #if (SLAVE_TYPE != BTN)	
-	if (counter_ticks == BLINK_INTERVAL)
-	{
-	    bus.bits.state = bus.bits.state == 0 ? 1 : 0;
-	    counter_ticks = 0;
-	}
-	counter_ticks++;
+        if (counter_ticks == BLINK_INTERVAL)
+        {
+            bus.bits.state = bus.bits.state == 0 ? 1 : 0;
+            counter_ticks = 0;
+        }
+        counter_ticks++;
 #endif
     }
 }
@@ -538,13 +557,13 @@ ISR(USART0_RX_vect)
 {
     if (index == 0)
     {
-	pkg.addr = UDR0;
+	    pkg.addr = UDR0;
     } else if (index == 1)
     {
-	pkg.mode = UDR0;
+	    pkg.mode = UDR0;
     } else if (index == 2)
     {
-	pkg.data.rdata = UDR0;
+	    pkg.reg = UDR0;
     }
     
     index++;
